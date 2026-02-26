@@ -16,7 +16,7 @@ When first starting the program, we are met with this error: Assert failed in fi
 Question: Why the assertion occured? What condition was being checked?
 
 Solution:
-This is occuring since q_tx (the transmission queue) was declared but the instance had not been created. So inside main, we added;
+This is occuring since q_tx (the transmission queue) was declared but the instance had not been created. So inside main, we added:
 q_tx      = xQueueCreate(TX_QUEUE_LEN, sizeof(uint8_t));
 Problem solved!
 The assertion occurs because at line 174, configASSERT(q_tx); validates that q_tx actually has a queue associated with this variable,
@@ -28,3 +28,11 @@ Question: Explain what busy waiting is and why it is problematic in an RTOS-Base
 
 Solution:
 Port max delay, problem with busy waiting, needs input, needs to execute something, and needs correct polling
+The error within UART_RX_Task was that it did not have the line: vTaskDelay(pdMS_TO_TICKS(POLL_DELAY_MS)) after the if statement in the for loop.
+
+Problem #3:
+Replace the blocking call with a non-blocking call within UART_TX_Task.
+Question: Explain why blocking operations are not appropriate in a polling-base design.
+
+Solution:
+Replace the xTicksToWait from pdMax... to 0.
