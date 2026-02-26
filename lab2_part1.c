@@ -6,7 +6,8 @@
  *  Author	: Shyama M. Gandhi, Mazen Elbaz
  *  Modified by : Antonio Andara
  *  Modified on	: January, 2026
- *
+ *  Modified on : February, 26, 2026
+ *  Authors  : Riley Whitford, Komaldeep Taggar
  *     ------------------------------------------------------------------------------------------------------------------------------
  *
  *     This is the main file that uses "sha256.h" header file.
@@ -162,6 +163,7 @@ int main(void)
   q_rx_byte = xQueueCreate(RX_QUEUE_LEN, sizeof(uint8_t));
   q_cmd     = xQueueCreate(CMD_QUEUE_LEN, sizeof(crypto_request_t));
   q_result  = xQueueCreate(CMD_QUEUE_LEN, sizeof(crypto_result_t)); 
+  q_tx      = xQueueCreate(TX_QUEUE_LEN, sizeof(uint8_t));
   
   configASSERT(UART_RX_Task);
   configASSERT(UART_TX_Task);
@@ -193,6 +195,7 @@ static void UART_RX_Task(void *pvParameters)
     if (uart_poll_rx(&byte)){
       xQueueSend(q_rx_byte, &byte, 0);
     }
+    vTaskDelay(pdMS_TO_TICKS(POLL_DELAY_MS));
   }
 }
 
@@ -206,7 +209,7 @@ static void UART_TX_Task(void *pvParameters)
   char c;
 
   for (;;){
-    if (xQueueReceive(q_tx, &c, portMAX_DELAY) == pdTRUE){
+    if (xQueueReceive(q_tx, &c, 0) == pdTRUE){
       uart_tx_byte((uint8_t)c);
     }
     vTaskDelay(pdMS_TO_TICKS(POLL_DELAY_MS));
@@ -346,7 +349,14 @@ void receive_string(char *buf, size_t buf_len)
     buf[0] = '\0';
 
     while (1){
-		
+		xQueueReceive(q_rx_byte, &recvd, 0);
+        if (idx < buf_len-1) {
+            if (recvd != '\r') {
+             buf[idx++] = recvd;
+        } else {
+            return;
+        }
+        }
         vTaskDelay(pdMS_TO_TICKS(POLL_DELAY_MS));
     }
 }
