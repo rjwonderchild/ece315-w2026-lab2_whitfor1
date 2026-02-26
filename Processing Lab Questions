@@ -1,0 +1,21 @@
+Processing Lab Questions
+
+Part 1:
+
+Formal Questions:
+1. Why do we use non-blocking operations in polling-based systems?
+2. Why must a delay be included inside each polling loop?
+3. How does the polling period affect system responsiveness and CPU usage?
+4. What problems can airse if a polling loop is implemented incorrectly?
+5. How can you determine an appropriate polling period for your system?
+6. What happens if a high-priority task busy-waits in a FreeRTOS system?
+
+Coding Decisions:
+Problem #1:
+When first starting the program, we are met with this error: Assert failed in file C:/Users/whitfor1/Desktop/ece315_lab2/lab2_part1/lab2_part1.c, line 747324309678
+
+Solution:
+This is occuring since q_tx (the transmission queue) was declared but the instance had not been created. So inside main, we added;
+q_tx      = xQueueCreate(TX_QUEUE_LEN, sizeof(uint8_t));
+Problem solved!
+
