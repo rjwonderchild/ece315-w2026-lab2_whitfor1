@@ -22,4 +22,8 @@ Problem solved!
 The assertion occurs because at line 174, configASSERT(q_tx); validates that q_tx actually has a queue associated with this variable,
 but since it was not intialized, the assertion fails.
 
+Problem #2:
+Identify the errors within UART_RX_Task.
+Question: Explain what busy waiting is and why it is problematic in an RTOS-Based system.
 
+Solution:
