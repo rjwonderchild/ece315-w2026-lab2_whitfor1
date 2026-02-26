@@ -27,3 +27,4 @@ Identify the errors within UART_RX_Task.
 Question: Explain what busy waiting is and why it is problematic in an RTOS-Based system.
 
 Solution:
+Port max delay, problem with busy waiting, needs input, needs to execute something, and needs correct polling
