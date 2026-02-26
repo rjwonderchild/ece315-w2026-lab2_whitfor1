@@ -13,9 +13,13 @@ Formal Questions:
 Coding Decisions:
 Problem #1:
 When first starting the program, we are met with this error: Assert failed in file C:/Users/whitfor1/Desktop/ece315_lab2/lab2_part1/lab2_part1.c, line 747324309678
+Question: Why the assertion occured? What condition was being checked?
 
 Solution:
 This is occuring since q_tx (the transmission queue) was declared but the instance had not been created. So inside main, we added;
 q_tx      = xQueueCreate(TX_QUEUE_LEN, sizeof(uint8_t));
 Problem solved!
+The assertion occurs because at line 174, configASSERT(q_tx); validates that q_tx actually has a queue associated with this variable,
+but since it was not intialized, the assertion fails.
+
 
