@@ -6,8 +6,7 @@
  *  Author	: Shyama M. Gandhi, Mazen Elbaz
  *  Modified by : Antonio Andara
  *  Modified on	: January, 2026
- *  Modified on : February, 26, 2026
- *  Authors  : Riley Whitford, Komaldeep Taggar
+ *
  *     ------------------------------------------------------------------------------------------------------------------------------
  *
  *     This is the main file that uses "sha256.h" header file.
@@ -348,89 +347,24 @@ void receive_string(char *buf, size_t buf_len)
     size_t idx = 0;
     buf[0] = '\0';
 
+    if (buf_len == 0) return;
+
     while (1){
-		xQueueReceive(q_rx_byte, &recvd, 0);
-        if (idx < buf_len-1) {
-            if (recvd != '\r') {
-             buf[idx++] = recvd;
+		if (xQueueReceive(q_rx_byte, &recvd, 0) == pdTRUE) {
+
+            if (recvd == '\r') {
+                buf[idx] = '\0';
+                return;
+            }
+            
+            if (idx < buf_len -1) {
+                buf[idx++] = recvd;
+            } else {
+                buf[buf_len - 1] = '\0';
+                return;
+            }
         } else {
-            return;
+            vTaskDelay(pdMS_TO_TICKS(POLL_DELAY_MS));
         }
-        }
-        vTaskDelay(pdMS_TO_TICKS(POLL_DELAY_MS));
     }
-}
-
-
-void flush_uart(void)
-{
-    uint8_t dummy;    
-    while (xQueueReceive(q_rx_byte, &dummy, 0) == pdTRUE);
-}
-
-
-void print_string(const char *str)
-{
-
-}
-
-void print_new_lines(int count)
-{
-    for (int i = 0; i < count; i++){
-        xil_printf("\n");
-    }
-}
-
-
-void hash_to_string(BYTE *hash, char *hash_string)
-{
-    for (int i = 0; i < HASH_LEN; i++){
-        sprintf(&hash_string[i * 2], "%02X", hash[i]);
-    }
-
-    hash_string[HASH_LEN * 2] = '\0'; // Null terminate the string
-}
-
-void sha256_string(const char* input, BYTE output[32])
-{
-    SHA256_CTX ctx;
-    sha256Init(&ctx);
-    sha256Update(&ctx, (BYTE*)input, strlen(input));
-    sha256Final(&ctx, output);
-}
-
-
-static void uart_init(void)
-{
-  XUartPs_Config *cfg;
-
-  cfg = XUartPs_LookupConfig(UART_BASEADDR);
-  if (!cfg){
-    while (1) {}
-  }
-
-  if (XUartPs_CfgInitialize(&UartPs, cfg, cfg->BaseAddress) != XST_SUCCESS){
-    while (1) {}
-  }
-
-  XUartPs_SetBaudRate(&UartPs, 115200);
-}
-
-
-static int uart_poll_rx(uint8_t *b)
-{
-  if (XUartPs_IsReceiveData(UartPs.Config.BaseAddress)){
-    *b = XUartPs_ReadReg(UartPs.Config.BaseAddress, XUARTPS_FIFO_OFFSET);
-    return 1;
-  }
-  return 0;
-}
-
-static void uart_tx_byte(uint8_t b)
-{
-  while (XUartPs_IsTransmitFull(UartPs.Config.BaseAddress)){
-
-  }
-  
-  XUartPs_WriteReg(UartPs.Config.BaseAddress, XUARTPS_FIFO_OFFSET, b);
 }
