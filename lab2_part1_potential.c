@@ -382,12 +382,15 @@ void print_string(const char *str) {
   }
 
   while (*str != '\0') {
+	  // Since *str is supposed to be a pointer to a character, defined a new variable c to use instead of str to avoid confusion if we need to debug.
+	  char c  = *str;
+	  
     // Need to send in one character at a time for non-blocking
-    if (xQueueSend(q_tx, str, 0) == pdTRUE) {
+    if (xQueueSend(q_tx, &c, 0) == pdTRUE) {
       str++;
     } else {
-      // Have a delay to prevent any busy waits from happening
-      vTaskDelay(pdMS_TO_TICKS(1));
+      // Have a delay to prevent any busy waits from happening, could be either POLL_DELAY_MS or 1, need to check on the boards.
+      vTaskDelay(pdMS_TO_TICKS(POLL_DELAY_MS));
     }
   }
 }
