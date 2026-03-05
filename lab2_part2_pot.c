@@ -81,6 +81,7 @@ typedef enum {
   CMD_NONE,
   CMD_HASH = '1',
   CMD_VERIFY = '2',
+  CMD_KBD_SSD ='3'
 } command_type_t;
 
 typedef struct {
@@ -108,20 +109,6 @@ typedef struct {
     TickType_t xPeriod;
 } duty_t;
 
-// GPIO devices through Command Struct
-typedef enum {
-    GPIO_NONE,
-    GPIO_SSD = '3',
-    GPIO_LED = '4'
-} gpio_command_type_t;
-
-typedef struct {
-    gpio_command_type_t ctrl;
-
-    key_t ssd_data;
-    duty_t led_data;
-} gpio_command_t;
-
 // ======================================================
 // FreeRTOS objects
 // ======================================================
@@ -131,7 +118,6 @@ static QueueHandle_t q_result  = NULL;   // crypto_result_t
 static QueueHandle_t q_tx      = NULL;   // char
 static QueueHandle_t xkey2display = NULL; // key_t
 static QueueHandle_t xbtn2rgb = NULL; // duty_ty
-static QueueHandle_t q_gpio_2uart = NULL;
 
 // ======================================================
 // UART instance
@@ -176,6 +162,8 @@ static void uart_tx_byte(uint8_t b);
 void print_string(const char *str);
 void print_new_lines(int count);
 void flush_uart(void);
+void getHex();
+int hexChk(char c);
 
 const char *init_message =
 	"A hash function is a mathematical algorithm that takes an input (or \"message\")\n"
@@ -207,12 +195,6 @@ int main(void)
   xbtn2rgb = xQueueCreate(1, sizeof(duty_t));
         if(xbtn2rgb == NULL) {
             xil_printf("Failed to create button to rgb queue.\r\n");
-            return XST_FAILURE;
-        }
-
-  q_gpio_2uart = xQueueCreate(4, sizeof(gpio_command_t));
-        if(q_gpio_2uart == NULL) {
-            xil_printf("Failed to create gpio to uart queue.\r\n");
             return XST_FAILURE;
         }
 
@@ -307,7 +289,6 @@ int main(void)
   configASSERT(q_cmd);
   configASSERT(q_result);
   configASSERT(q_tx);
-  configASSERT(q_gpio_2uart);
 
   print_new_lines(50);
   print_string("Initialization complete\nSTARTING APP\n");
@@ -370,7 +351,7 @@ static void CLI_Task(void *pvParameters)
 
     for (;;){
         print_string("\n*******************************************\n");
-        print_string("Menu:\n1. Hash a string\n2. Verify hash of a given string\n3. Control SSD\n4. Set LED Brightness");
+        print_string("Menu:\n1. Hash a string\n2. Verify hash of a given string\n3. SSD Display\n");
         print_string("\nEnter your option: ");
 
         receive_byte((uint8_t *)&op);
@@ -418,22 +399,16 @@ static void CLI_Task(void *pvParameters)
                     print_string("\nHashes are different\n");
 				}
                 break;
-            
-            case GPIO_SSD:
-            {
-                gpio_command_t cmd;
-                cmd.ctrl = GPIO_SSD;
-                print_string("Pmod KYPD app started. Press any key on the Keypad.\r\n");
-                print_string("Enter current digit: \r\n");
-                receive_byte(&cmd.ssd_data.current);
-                print_string("Enter previous digit: \r\n");
-                receive_byte(&cmd.ssd_data.previous);
 
-                xQueueSend(q_gpio_2uart, &cmd, portMAX_DELAY);
+            case CMD_KBD_SSD:
+                print_string("Keyboard to SSD Active. Please input a hex valid key; 0-9, a-f, or A-F.\n");
+                print_string("Enter q to quit.\n");
+                print_string("Enter command: \n");
+
+                flush_uart();
+                getHex();
 
                 break;
-            }
-
 
             default:
                 print_string("\nOption not recognized\n");
@@ -494,7 +469,7 @@ static void vKeypadTask( void *pvParameters )
 	u8 new_key, current_key = 'x', previous_key = 'x';
     const TickType_t debounceDelay = 25;
 
-
+    //xil_printf("Pmod KYPD app started. Press any key on the Keypad.\r\n");
 	while (1){
 		// Capture state of the keypad
 		keystate = KYPD_getKeyStates(&KYPDInst);
@@ -507,7 +482,7 @@ static void vKeypadTask( void *pvParameters )
 
 		// Print key detect if a new key is pressed or if status has changed
 		if (status == KYPD_SINGLE_KEY && previous_status == KYPD_NO_KEY){
-			xil_printf("Key Pressed: %c\r\n", (char) new_key);
+			//xil_printf("Key Pressed: %c\r\n", (char) new_key);
 
 /*************************** Enter your code here ****************************/
 			// TODO: update value of previous_key and current_key
@@ -518,14 +493,14 @@ static void vKeypadTask( void *pvParameters )
 
 /*****************************************************************************/
 		} else if (status == KYPD_MULTI_KEY && status != previous_status){
-			print_string("Error: Multiple keys pressed\r\n");
+			//xil_printf("Error: Multiple keys pressed\r\n");
 		}
 
 /*************************** Enter your code here ****************************/
 		// TODO: display the value of `status` each time it changes
 
         if (status != previous_status) {
-           xil_printf("Status changed: %d\r\n", status);
+           //xil_printf("Status changed: %d\r\n", status);
         }
 
 /*****************************************************************************/
@@ -536,12 +511,6 @@ static void vKeypadTask( void *pvParameters )
         txKey.current = current_key;
 
         xQueueOverwrite(xkey2display, &txKey);
-
-        gpio_command_t cmd;
-        cmd.ctrl = GPIO_SSD;
-        cmd.ssd_data.previous = previous_key;
-        cmd.ssd_data.current = current_key;
-        xQueueSend(q_gpio_2uart, &cmd, 0);
 
 /*****************************************************************************/
 	}
@@ -557,22 +526,22 @@ static void vDisplayTask(void *pvParameters)
     const TickType_t xDelay = pdMS_TO_TICKS(12);
     // 10 works, 15 has slight flickering, 12 seems to have no flickering.
     key_t rxKey;
-    gpio_command_t cmd;
+    key_t currentKey = {'x', 'x'};
 
     while (1) 
     {
-        if (xQueueReceive(xkey2display, &rxKey, 0) == pdPASS) {
-            if (cmd.ctrl == GPIO_SSD) {
-            ssd_value = SSD_decode(rxKey.current, 1);
-            XGpio_DiscreteWrite(&SSDInst, 1, ssd_value);
-            vTaskDelay(xDelay);
-
-            ssd_value = SSD_decode(rxKey.previous, 0);
-            XGpio_DiscreteWrite(&SSDInst, 1, ssd_value);
-            vTaskDelay(xDelay);
-
+        if (xQueueReceive(xkey2display, &rxKey, 0) == pdPASS) 
+            {
+                currentKey = rxKey;
             }
-        }
+
+            ssd_value = SSD_decode(currentKey.current, 1);
+            XGpio_DiscreteWrite(&SSDInst, 1, ssd_value);
+            vTaskDelay(xDelay);
+
+            ssd_value = SSD_decode(currentKey.previous, 0);
+            XGpio_DiscreteWrite(&SSDInst, 1, ssd_value);
+            vTaskDelay(xDelay);
     }
 }
 
@@ -684,6 +653,61 @@ u32 SSD_decode(u8 key_value, u8 cathode)
             return result | 0b10000000;
 	}
 }
+
+// ======================================================
+// UART SSD TASK
+// ======================================================
+
+int hexChk(char c) 
+{
+    if ((c >= '0' && c<= '9') ||
+        (c >= 'a' && c<= 'f') ||
+        (c >= 'A' && c<= 'F'))
+        {
+            return 1;
+        }
+
+        return 0;
+}
+
+void getHex()
+{
+    uint8_t c;
+    key_t txKey;
+
+    txKey.previous = 'x';
+    txKey.current = 'x';
+
+    while (1)
+    {
+        receive_byte(&c);
+
+        if (c == '\r' || c == '\n')
+            continue;
+
+        if (c == 'q' || c == 'Q')
+        {
+            print_string("\nExiting keyboard mode\n");
+            return;
+        }
+
+        if (hexChk(c))
+        {
+            if (c >= 'a' && c <= 'f')
+                c -= 32;
+
+            txKey.previous = txKey.current;
+            txKey.current = c;
+
+            xQueueOverwrite(xkey2display, &txKey);
+        }
+        else 
+        {
+            print_string("\nInvalid hex key\n");
+        }
+    }
+}
+
 
 uint8_t receive_byte(uint8_t *out_byte)
 {
