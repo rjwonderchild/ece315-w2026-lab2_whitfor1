@@ -36,3 +36,8 @@ Question: Explain why blocking operations are not appropriate in a polling-base 
 
 Solution:
 Replace the xTicksToWait from pdMax... to 0.
+
+-------
+
+Part 2:
+Question: In your report, explain your command structure design, describe your parsing strategy, justify your queue architecture, and disucss how you ensured that the system remains repsonsive and free of busy-wait conditions.
