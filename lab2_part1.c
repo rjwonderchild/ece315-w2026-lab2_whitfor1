@@ -355,7 +355,11 @@ void receive_string(char *buf, size_t buf_len)
         return;
 
     while (1){
-		if (xQueueReceive(q_rx_byte, &recvd, 0) == pdTRUE) {
+		if (xQueueReceive(q_rx_byte, &recvd, pdMS_TO_TICKS(50)) == pdTRUE) {
+
+            if (recvd == '\n'){
+                continue;
+            }
 
             if (recvd == '\r') {
                 buf[idx] = '\0';
