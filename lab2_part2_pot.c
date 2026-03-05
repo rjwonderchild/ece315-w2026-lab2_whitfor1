@@ -405,7 +405,6 @@ static void CLI_Task(void *pvParameters)
                 print_string("Enter q to quit.\n");
                 print_string("Enter command: \n");
 
-                flush_uart();
                 getHex();
 
                 break;
@@ -678,6 +677,7 @@ void getHex()
     txKey.previous = 'x';
     txKey.current = 'x';
 
+    
     while (1)
     {
         receive_byte(&c);
@@ -700,6 +700,12 @@ void getHex()
             txKey.current = c;
 
             xQueueOverwrite(xkey2display, &txKey);
+
+            print_string("\nDisplaying: ");
+            char out = c;
+            xQueueSend(q_tx, &out, 0);
+            print_string("\n");
+
         }
         else 
         {
