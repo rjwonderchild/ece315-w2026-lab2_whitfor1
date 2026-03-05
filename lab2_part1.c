@@ -348,6 +348,9 @@ void receive_string(char *buf, size_t buf_len)
     size_t idx = 0;
     buf[0] = '\0';
 
+    if (buf_len == 0) 
+        return;
+
     while (1){
 		if (xQueueReceive(q_rx_byte, &recvd, 0) == pdTRUE) {
 
