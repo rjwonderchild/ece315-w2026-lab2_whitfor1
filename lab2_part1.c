@@ -132,6 +132,11 @@ int main(void)
 
   uart_init();
 
+  q_rx_byte = xQueueCreate(RX_QUEUE_LEN, sizeof(uint8_t));
+  q_cmd     = xQueueCreate(CMD_QUEUE_LEN, sizeof(crypto_request_t));
+  q_result  = xQueueCreate(CMD_QUEUE_LEN, sizeof(crypto_result_t)); 
+  q_tx      = xQueueCreate(TX_QUEUE_LEN, sizeof(uint8_t));
+
   xTaskCreate(UART_RX_Task,
                 "UART_RX",
                 1024, 
@@ -160,10 +165,6 @@ int main(void)
                 2, 
                 NULL);
   
-  q_rx_byte = xQueueCreate(RX_QUEUE_LEN, sizeof(uint8_t));
-  q_cmd     = xQueueCreate(CMD_QUEUE_LEN, sizeof(crypto_request_t));
-  q_result  = xQueueCreate(CMD_QUEUE_LEN, sizeof(crypto_result_t)); 
-  q_tx      = xQueueCreate(TX_QUEUE_LEN, sizeof(uint8_t));
 
   configASSERT(UART_RX_Task);
   configASSERT(UART_TX_Task);
@@ -175,7 +176,7 @@ int main(void)
   configASSERT(q_tx);
 
   print_new_lines(50);
-  xil_printf("Initialization complete\nSTARTING APP\n");
+  print_string("Initialization complete\nSTARTING APP\n");
 
   vTaskStartScheduler();
 
@@ -195,7 +196,7 @@ static void UART_RX_Task(void *pvParameters)
     if (uart_poll_rx(&byte)){
       xQueueSend(q_rx_byte, &byte, 0);
     }
-    vTaskDelay(pdMS_TO_TICKS(POLL_DELAY_MS));
+    vTaskDelay(pdMS_TO_TICKS(5));
   }
 }
 
@@ -209,10 +210,12 @@ static void UART_TX_Task(void *pvParameters)
   char c;
 
   for (;;){
-    if (xQueueReceive(q_tx, &c, 0) == pdTRUE){
+    if (xQueueReceive(q_tx, &c, pdMS_TO_TICKS(50)) == pdTRUE){
       uart_tx_byte((uint8_t)c);
+
+      while (xQueueReceive(q_tx, &c, 0) == pdTRUE)
+        uart_tx_byte(c);
     }
-    vTaskDelay(pdMS_TO_TICKS(POLL_DELAY_MS));
   }
 }
 
@@ -229,38 +232,38 @@ static void CLI_Task(void *pvParameters)
 
     uint8_t dummy;
 
-    xil_printf((const char *)pvParameters);
+    print_string((const char *)pvParameters);
 
     for (;;){
-        xil_printf("\n*******************************************\n");
-        xil_printf("Menu:\n1. Hash a string\n2. Verify hash of a given string\n");
-        xil_printf("\nEnter your option: ");
+        print_string("\n*******************************************\n");
+        print_string("Menu:\n1. Hash a string\n2. Verify hash of a given string\n");
+        print_string("\nEnter your option: ");
 
         receive_byte((uint8_t *)&op);
 
-        xil_printf("\n*******************************************\n");
+        print_string("\n*******************************************\n");
 
         switch (op){
             case CMD_HASH:
                 req.type = CMD_HASH;
-                xil_printf("\nEnter string to calculate hash: ");
+                print_string("\nEnter string to calculate hash: ");
                 receive_string(req.input_text, sizeof(req.input_text));
                 xQueueSend(q_cmd, &req, 0);
                 /* Polling queue for result */
                 while (xQueueReceive(q_result, &res, 0) != pdTRUE){
                     vTaskDelay(pdMS_TO_TICKS(POLL_DELAY_MS));
                 }
-                xil_printf("\nCalculated hash: ");
-                xil_printf(res.calculated_hash);
-                xil_printf("\n");
+                print_string("\nCalculated hash: ");
+                print_string(res.calculated_hash);
+                print_string("\n");
                 break;
 
             case CMD_VERIFY:
                 req.type = CMD_VERIFY;
-                xil_printf("\nEnter string to verify: ");
+                print_string("\nEnter string to verify: ");
                 receive_string(req.input_text, sizeof(req.input_text));
 
-                xil_printf("\nEnter the precomputed hash: ");
+                print_string("\nEnter the precomputed hash: ");
                 receive_string(req.expected_hash, sizeof(req.expected_hash));
 
                 xQueueSend(q_cmd, &req, 0);
@@ -270,25 +273,25 @@ static void CLI_Task(void *pvParameters)
                     vTaskDelay(pdMS_TO_TICKS(POLL_DELAY_MS));
                 }
 
-                xil_printf("\nCalculated hash: ");
-                xil_printf(res.calculated_hash);
-                xil_printf("\nExpected hash: ");
-                xil_printf(req.expected_hash);
+                print_string("\nCalculated hash: ");
+                print_string(res.calculated_hash);
+                print_string("\nExpected hash: ");
+                print_string(req.expected_hash);
 
                 if (res.match){
-                    xil_printf("\nHashes are the same!\n");
+                    print_string("\nHashes are the same!\n");
 				} else {
-                    xil_printf("\nHashes are different\n");
+                    print_string("\nHashes are different\n");
 				}
                 break;
 
             default:
-                xil_printf("\nOption not recognized\n");
+                print_string("\nOption not recognized\n");
                 break;
         }
 		
         vTaskDelay(pdMS_TO_TICKS(1000));
-        xil_printf("\nPress any key to continue.");
+        print_string("\nPress any key to continue.");
         receive_byte(&dummy);
         vTaskDelay(pdMS_TO_TICKS(1000));
         flush_uart();
@@ -363,8 +366,9 @@ void receive_string(char *buf, size_t buf_len)
                 buf[idx++] = recvd;
                 buf[idx] = '\0';
             }
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(POLL_DELAY_MS));
         }
-        vTaskDelay(pdMS_TO_TICKS(POLL_DELAY_MS));
     }
 }
 
@@ -378,13 +382,22 @@ void flush_uart(void)
 
 void print_string(const char *str)
 {
+    if (str == NULL) {
+        return;
+    }
+
+    while (*str != '\0') {
+        uint8_t c = (uint8_t)*str++;
+
+        xQueueSend(q_tx, &c, pdMS_TO_TICKS(50));
+    }
 
 }
 
 void print_new_lines(int count)
 {
     for (int i = 0; i < count; i++){
-        xil_printf("\n");
+        print_string("\n");
     }
 }
 
