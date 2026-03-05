@@ -1,12 +1,13 @@
 /*
- *	Lab 2: Part 2: UART in Polling Mode
+ *	Lab 2: Part 1: UART in Polling Mode
  *
  *	ECE 315		: Computer Interfacing
  *  Created on	: July 27, 2021
  *  Author	: Shyama M. Gandhi, Mazen Elbaz
  *  Modified by : Antonio Andara
  *  Modified on	: January, 2026
- *
+ *  Authors : Riley Whitford (whitfor1), Komaldeep Tagger (ktaggar)
+ *  Modified on : March 4, 2026
  *     ------------------------------------------------------------------------------------------------------------------------------
  *
  *     This is the main file that uses "sha256.h" header file.
@@ -163,7 +164,7 @@ int main(void)
   q_cmd     = xQueueCreate(CMD_QUEUE_LEN, sizeof(crypto_request_t));
   q_result  = xQueueCreate(CMD_QUEUE_LEN, sizeof(crypto_result_t)); 
   q_tx      = xQueueCreate(TX_QUEUE_LEN, sizeof(uint8_t));
-  
+
   configASSERT(UART_RX_Task);
   configASSERT(UART_TX_Task);
   configASSERT(CLI_Task);
@@ -347,8 +348,6 @@ void receive_string(char *buf, size_t buf_len)
     size_t idx = 0;
     buf[0] = '\0';
 
-    if (buf_len == 0) return;
-
     while (1){
 		if (xQueueReceive(q_rx_byte, &recvd, 0) == pdTRUE) {
 
@@ -356,15 +355,86 @@ void receive_string(char *buf, size_t buf_len)
                 buf[idx] = '\0';
                 return;
             }
-            
-            if (idx < buf_len -1) {
+
+            if (idx < buf_len - 1) {
                 buf[idx++] = recvd;
-            } else {
-                buf[buf_len - 1] = '\0';
-                return;
+                buf[idx] = '\0';
             }
-        } else {
-            vTaskDelay(pdMS_TO_TICKS(POLL_DELAY_MS));
         }
+        vTaskDelay(pdMS_TO_TICKS(POLL_DELAY_MS));
     }
+}
+
+
+void flush_uart(void)
+{
+    uint8_t dummy;    
+    while (xQueueReceive(q_rx_byte, &dummy, 0) == pdTRUE);
+}
+
+
+void print_string(const char *str)
+{
+
+}
+
+void print_new_lines(int count)
+{
+    for (int i = 0; i < count; i++){
+        xil_printf("\n");
+    }
+}
+
+
+void hash_to_string(BYTE *hash, char *hash_string)
+{
+    for (int i = 0; i < HASH_LEN; i++){
+        sprintf(&hash_string[i * 2], "%02X", hash[i]);
+    }
+
+    hash_string[HASH_LEN * 2] = '\0'; // Null terminate the string
+}
+
+void sha256_string(const char* input, BYTE output[32])
+{
+    SHA256_CTX ctx;
+    sha256Init(&ctx);
+    sha256Update(&ctx, (BYTE*)input, strlen(input));
+    sha256Final(&ctx, output);
+}
+
+
+static void uart_init(void)
+{
+  XUartPs_Config *cfg;
+
+  cfg = XUartPs_LookupConfig(UART_BASEADDR);
+  if (!cfg){
+    while (1) {}
+  }
+
+  if (XUartPs_CfgInitialize(&UartPs, cfg, cfg->BaseAddress) != XST_SUCCESS){
+    while (1) {}
+  }
+
+  XUartPs_SetBaudRate(&UartPs, 115200);
+}
+
+
+static int uart_poll_rx(uint8_t *b)
+{
+  if (XUartPs_IsReceiveData(UartPs.Config.BaseAddress)){
+    *b = XUartPs_ReadReg(UartPs.Config.BaseAddress, XUARTPS_FIFO_OFFSET);
+    return 1;
+  }
+  return 0;
+}
+
+static void uart_tx_byte(uint8_t b)
+{
+  while (XUartPs_IsTransmitFull(UartPs.Config.BaseAddress)){
+
+  }
+  
+  XUartPs_WriteReg(UartPs.Config.BaseAddress, XUARTPS_FIFO_OFFSET, b);
 }
