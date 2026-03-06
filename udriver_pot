@@ -70,6 +70,8 @@ void handleReceiveEvent()
     while (XUartPs_IsReceiveData(UART_BASEADDR)){
         receive_buffer = XUartPs_ReadReg(UART_BASEADDR, UART_FIFO_OFFSET);
 
+        byteCount++;
+
         xQueueSendFromISR(xRxQueue, &receive_buffer, &xHigherPriorityTaskWoken);
 
     }
@@ -107,22 +109,15 @@ void handleSentEvent()
 // -------------------------------------------------
 void enableTxEmpty()
 {
-    u32 txMask;
+    IntrMask |= XUARTPS_IXR_TXEMPTY;
+    XUartPs_SetInterruptMask(&UART, IntrMask);
 
-    txMask = XUartPs_GetInterruptMask(&UART);
-    txMask |= XUARTPS_IXR_TXEMPTY;
-
-    XUartPs_SetInterruptMask(&UART, txMask);   
 }
 
 void disableTxEmpty()
 {
-    u32 txMask;
-
-    txMask = XUartPs_GetInterruptMask(&UART);
-    txMask &= ~XUARTPS_IXR_TXEMPTY;
-
-    XUartPs_SetInterruptMask(&UART, txMask); 
+    IntrMask &= ~XUARTPS_IXR_TXEMPTY;
+    XUartPs_SetInterruptMask(&UART, IntrMask);
 }
 
 // -------------------------------------------------
@@ -143,7 +138,6 @@ BaseType_t myTransmitFull(void)
 void mySendByte(u8 data)
 {  
    xQueueSend(xTxQueue, &data, portMAX_DELAY);
-
    enableTxEmpty(); 
 }
 
@@ -151,7 +145,6 @@ void mySendByte(u8 data)
 u8 myReceiveByte(void)
 {
     u8 receivedByte;
-
     xQueueReceive(xRxQueue, &receivedByte, portMAX_DELAY);
     return receivedByte;
 }
@@ -159,10 +152,11 @@ u8 myReceiveByte(void)
 
 void mySendString(const char* str)
 {
-    while (*str != '\0') {
-        mySendByte((u8)*str);
-        str++;
-    }
+    int i = 0;
+    while (str[i] != '\0') {
+        mySendByte((u8)str[i]);
+        i++;
+    } 
 }
 
 
@@ -224,3 +218,6 @@ int setupInterruptSystem(INTC *IntcInstancePtr, XUartPs *UartInstancePtr, u16 Ua
 
     return XST_SUCCESS;
 }
+
+
+
