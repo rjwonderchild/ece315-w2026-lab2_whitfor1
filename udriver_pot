@@ -9,12 +9,10 @@
  * TXTRIG-based UART driver
  */
 
+
 #include "uart_driver.h"
 #include "task.h"
-#include <portmacro.h>
 #include <xil_printf.h>
-#include <xuartps.h>
-#include <xuartps_hw.h>
 
 // -------------------------------------------------
 // Global variables
@@ -61,15 +59,17 @@ void interruptHandler(void *CallBackRef, u32 event, unsigned int EventData)
 // -------------------------------------------------
 void handleReceiveEvent()
 {
-    countRxIrq++; // Rx intr happened, increment counter
-
     u8 receive_buffer;
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+    // Counting an occurrence of receive interrupt
+    countRxIrq++;
 
 
     while (XUartPs_IsReceiveData(UART_BASEADDR)){
         receive_buffer = XUartPs_ReadReg(UART_BASEADDR, UART_FIFO_OFFSET);
 
+        // Count byte(s) received
         byteCount++;
 
         xQueueSendFromISR(xRxQueue, &receive_buffer, &xHigherPriorityTaskWoken);
@@ -84,10 +84,11 @@ void handleReceiveEvent()
 // -------------------------------------------------
 void handleSentEvent()
 {
-    countTxIrq++; // Tx intr happened, increment counter
-
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     u8 txByte;
+
+    // Counting an occurrence of send interrupt
+    countTxIrq++;
 
 
     // Fill FIFO while not full and queue has data
@@ -111,7 +112,6 @@ void enableTxEmpty()
 {
     IntrMask |= XUARTPS_IXR_TXEMPTY;
     XUartPs_SetInterruptMask(&UART, IntrMask);
-
 }
 
 void disableTxEmpty()
@@ -135,28 +135,33 @@ BaseType_t myTransmitFull(void)
 }
 
 
-void mySendByte(u8 data)
-{  
-   xQueueSend(xTxQueue, &data, portMAX_DELAY);
-   enableTxEmpty(); 
+void mySendByte(u8 txByte)
+{
+    xQueueSendToBack(xTxQueue, &txByte, portMAX_DELAY);
+
+    enableTxEmpty();
 }
 
 
 u8 myReceiveByte(void)
 {
-    u8 receivedByte;
-    xQueueReceive(xRxQueue, &receivedByte, portMAX_DELAY);
-    return receivedByte;
+    u8 rxByte;
+
+    xQueueReceive(xRxQueue, &rxByte, portMAX_DELAY);
+
+    return rxByte;
 }
 
 
 void mySendString(const char* str)
 {
     int i = 0;
-    while (str[i] != '\0') {
-        mySendByte((u8)str[i]);
+
+    while (str[i] != '\0')
+    {
+        mySendByte(str[i]);
         i++;
-    } 
+    }
 }
 
 
@@ -218,6 +223,9 @@ int setupInterruptSystem(INTC *IntcInstancePtr, XUartPs *UartInstancePtr, u16 Ua
 
     return XST_SUCCESS;
 }
+
+
+
 
 
 
