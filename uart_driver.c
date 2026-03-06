@@ -1,201 +1,369 @@
 /*
- * uart_driver.c
- * Created on: July 27, 2021
- * Author: Shyama M. Gandhi
- * Modified by : Antonio Andara
- * Modified on : February 22, 2026
- * TXTRIG-based UART driver
+ *	Lab 2: Part 3: UART in Interrupt Mode
+ *
+ *	ECE 315		: Computer Interfacing
+ *  Created on	: July 27, 2021
+ *  Author	: Shyama M. Gandhi, Mazen Elbaz
+ *  Modified by : Antonio Andara
+ *  Modified on	: January 24, 2023
+ *  Modified on : March 5, 2026
+ *  Authors : Riley Whitford (whitfor1), Komaldeep Taggar (ktaggar)
+ *
+ *     ------------------------------------------------------------------------------------------------------------------------------
+ *
+ *     This is the main file that uses the Xilinx the "uart_driver.h" header file.
+ *     The final objective is to implement as interrupt mode receive side and polling mode on transmit side of the UART.
+ *
+ *     Inside the interrupt service routine in the uart_Driver.h file, the received bytes will be written at the back of receive queue. (xRxQueue)
+ *     The bytes to be transmitted later on to UART console, will be read from the front of the front of the transmit queue. (xTxQueue)
+ *
+ *
+ *     Overview of uart_driver.h file:
+ *     This driver file is responsible for Initializing the UART, setting up the Interrupt System, Implements the ISR when a receive or sent event is triggered via UART,
+ *     and implementing the four driver functions myReceiveData(), MyReceiveByte(), myTransmitFull() and MySendByte().
+ *     You are suppose to add the code at the commented places in this uart_driver.h file.
+ *     Please read the explanations carefully for your understanding.
+ *
+ *     Overview of this main source .c file:
+ *     The driver file does all the background work and the queue implementation, which is hidden from the user in this driver file. Is the four functions myReceiveData(), MyReceiveByte(), myTransmitFull() and MySendByte(),
+ *     that will be used to play around in this file.
+ *     This file will also have the logic responsible for detecting the "\r#\r" and "\r%\r" termination sequence for displaying the interrupt statistics and resetting the variables respectively.
+ *     It is in this file where students will enter the logic to change the letter capitalization.
+ *     Please enter your code at the commented sections in this file too.
+ *
+ *     ------------------------------------------------------------------------------------------------------------------------------
  */
 
+
+#include "stdio.h"
+#include "xgpio.h"
+#include "xil_printf.h"
+#include "xil_types.h"
+// #include "xtime_l.h"
+
+// UART driver header file
 #include "uart_driver.h"
-#include "task.h"
-#include <xil_printf.h>
 
-// -------------------------------------------------
-// Global variables
-// -------------------------------------------------
-XUartPs UART;
-XUartPs_Config *Config;
-INTC InterruptController;
-u32 IntrMask;
+// Devices
+#define SSD_DEVICE_ID   XPAR_GPIO_SSD_BASEADDR
+#define BTN_DEVICE_ID	XPAR_GPIO_INPUTS_BASEADDR
+#define LEDS_DEVICE_ID	XPAR_GPIO_LEDS_BASEADDR
 
-// Queues
-QueueHandle_t xTxQueue;
-QueueHandle_t xRxQueue;
+// Device channels
+#define SSD_CHANNEL		1
+#define BTN_CHANNEL		1
 
-// Interrupt counters
-int countRxIrq;
-int countTxIrq;
-int byteCount;
+// Other Useful Macros
+#define BTN0 1
+#define BTN1 2
+#define BTN2 4
+#define BTN3 8
+#define CHAR_ESC				0x23	// '#' character is used as termination sequence
+#define CHAR_CARRIAGE_RETURN	0x0D	// '\r' character is used in the termination sequence
+#define SEQUENCE_LENGTH 3 				//Rolling buffer sequence length
+//#define configUSE_IDLE_HOOK 1
 
-// -------------------------------------------------
-// Interrupt Handler
-// -------------------------------------------------
-void interruptHandler(void *CallBackRef, u32 event, unsigned int EventData)
+
+// Device declaration
+XGpio SSDInst, btnInst, swInst, ledsInst;
+
+
+// Function prototypes
+void vBufferReceiveTask(void *p);
+void vBufferSendTask(void *p);
+
+
+u8 checkBufferSequence(u8 rollingBuffer[], char* sequence);
+void updateRollingBuffer(u8 rollingBuffer[], u8 receivedByte);
+
+u32 sevenSegDecode(int digit, u8 cathode);
+
+
+TaskHandle_t task_receiveuarthandle = NULL;
+TaskHandle_t task_transmituarthandle = NULL;
+
+int main()
 {
-    u32 isrStatus;
+    // Initialization
+	int status;
 
-    isrStatus = XUartPs_ReadReg(UART_BASEADDR, XUARTPS_ISR_OFFSET);
+	// SSD
+	status = XGpio_Initialize(&SSDInst, SSD_DEVICE_ID);
+	if(status != XST_SUCCESS){
+		xil_printf("GPIO Initialization for SSD failed.\r\n");
+		return XST_FAILURE;
+	}
 
-    // RX events
-    if (isrStatus & (XUARTPS_IXR_RXFULL | XUARTPS_IXR_RXOVR)){
-        handleReceiveEvent();
+	// Buttons
+	status = XGpio_Initialize(&btnInst, BTN_DEVICE_ID);
+	if(status != XST_SUCCESS){
+		xil_printf("GPIO Initialization for buttons failed.\r\n");
+		return XST_FAILURE;
+	}
+
+	// LEDS
+	status = XGpio_Initialize(&ledsInst, LEDS_DEVICE_ID);
+	if(status != XST_SUCCESS){
+		xil_printf("GPIO Initialization for LEDS failed.\r\n");
+		return XST_FAILURE;
+	}
+
+	// switches
+	status = XGpio_Initialize(&swInst, BTN_DEVICE_ID);
+    if(status != XST_SUCCESS){
+        xil_printf("GPIO Initialization for switches failed.\r\n");
+        return XST_FAILURE;
     }
 
-    // TX EMPTY event
-    if (isrStatus & XUARTPS_IXR_TXEMPTY){
-        handleSentEvent();
-    }
+    // UART
+    status = initializeUART();
+	if (status != XST_SUCCESS){
+		xil_printf("UART Initialization failed\n");
+	}
 
-    // Clear interrupts
-    XUartPs_WriteReg(UART_BASEADDR, XUARTPS_ISR_OFFSET, isrStatus);
+	// Device data direction: 0 for output 1 for input
+	XGpio_SetDataDirection(&SSDInst, SSD_CHANNEL, 0x00);
+	XGpio_SetDataDirection(&btnInst, BTN_CHANNEL, 0x0F);
+	XGpio_SetDataDirection(&ledsInst, 1, 0x00);
+	XGpio_SetDataDirection(&swInst, 2, 0x0F);
+
+
+
+    // FreeRTOS Tasks
+	xTaskCreate( vBufferReceiveTask
+			   , "uart_receive_task"
+			   , 1024
+			   , (void*)0
+			   , tskIDLE_PRIORITY+1
+			   , &task_receiveuarthandle
+			   );
+
+	xTaskCreate( vBufferSendTask
+			   , "uart_transmit_task"
+			   , 1024
+			   , (void*)0
+			   , tskIDLE_PRIORITY+1
+			   , &task_transmituarthandle
+			   );
+
+    // Queues
+	xTxQueue = xQueueCreate( SIZE_OF_QUEUE, sizeof(u8));
+	xRxQueue = xQueueCreate( SIZE_OF_QUEUE, sizeof(u8));
+
+    // assertions
+    configASSERT(vBufferReceiveTask);
+    configASSERT(vBufferSendTask);
+    configASSERT(xTxQueue);
+	configASSERT(xTxQueue);
+	configASSERT(xRxQueue);
+
+    // initializing globals
+    countRxIrq = 0;
+	countTxIrq = 0;
+    byteCount = 0;
+
+	xil_printf(
+	    "\n====== App Ready ======\n"
+	    "Instructions:\n"
+	    "- Send data via serial terminal. Press Enter to swap case of letters.\n"
+	    "  (Numbers/symbols unchanged).\n"
+	    "- To view interrupt count, type: '\\r#\\r'\n"
+	    "- To reset interrupt count, type: '\\r%\\r'\n"
+	    "- BTN0: Display Rx interrupt count on SSD.\n"
+	    "- BTN1: Display Tx interrupt count on SSD.\n"
+		"- BTN2: Display byte count on SSD.\n"
+		"- BTN3: Reset interrupt and byte count.\n"
+	    "========================\n\n"
+	);
+
+	vTaskStartScheduler();
+
+    while(1);
+
+	return 0;
+
 }
 
-// -------------------------------------------------
-// RX ISR
-// -------------------------------------------------
-void handleReceiveEvent()
+
+void vBufferReceiveTask(void *p)
 {
-    u8 receive_buffer;
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    int status;
+    u8 pcString, cathode = 0;
+    char formattedChar;
+    u32 ssd_value = 1;
+    unsigned int sendMethod = 0, swVal, buttonVal = 0;
+    u8 rollingBuffer[SEQUENCE_LENGTH] = {0, 0, 0};
 
+    /* Local transmit buffer for string mode */
+    char txBuffer[128];
+    int txIndex = 0;
 
-    while (XUartPs_IsReceiveData(UART_BASEADDR)){
-        receive_buffer = XUartPs_ReadReg(UART_BASEADDR, UART_FIFO_OFFSET);
-
-        xQueueSendFromISR(xRxQueue, &receive_buffer, &xHigherPriorityTaskWoken);
-
+    status = setupInterruptSystem(&InterruptController, &UART, UART_INT_IRQ_ID);
+    if (status != XST_SUCCESS){
+        xil_printf("UART PS interrupt failed\n");
     }
 
-    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-}
+    while (1)
+    {
+        /* Wait until RX queue has data */
+        while (myReceiveData() == pdFALSE){
+            swVal = XGpio_DiscreteRead(&swInst, 2);
+            sendMethod = (swVal == 0) ? 0 : 1;
 
-// -------------------------------------------------
-// TX ISR
-// -------------------------------------------------
-void handleSentEvent()
-{
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    u8 txByte;
+            buttonVal = XGpio_DiscreteRead(&btnInst, 1);
 
+            if (buttonVal == BTN0){
+                ssd_value = sevenSegDecode(countRxIrq, cathode);
+            } else if (buttonVal == BTN1){
+                ssd_value = sevenSegDecode(countTxIrq, cathode);
+            } else if (buttonVal == BTN2){
+                ssd_value = sevenSegDecode(byteCount, cathode);
+            } else if (buttonVal == BTN3){
+                byteCount  = 0;
+                countRxIrq = 0;
+                countTxIrq = 0;
+                ssd_value  = sevenSegDecode(88, cathode);
+            } else{
+                ssd_value = sevenSegDecode(0, cathode);
+            }
 
-    // Fill FIFO while not full and queue has data
-    while (!(XUartPs_ReadReg(UART.Config.BaseAddress, XUARTPS_SR_OFFSET) & XUARTPS_SR_TXFULL)){
-        if (xQueueReceiveFromISR(xTxQueue, &txByte, &xHigherPriorityTaskWoken) == pdPASS){
-            XUartPs_WriteReg(UART.Config.BaseAddress, XUARTPS_FIFO_OFFSET, txByte);
+            XGpio_DiscreteWrite(&SSDInst, SSD_CHANNEL, ssd_value);
+            cathode = !cathode;
+        }
+
+        pcString = myReceiveByte();
+        formattedChar = (char)pcString;
+
+        if (formattedChar >= 'A' && formattedChar <= 'Z'){
+            formattedChar = tolower(formattedChar);
+        } else if (formattedChar >= 'a' && formattedChar <= 'z'){
+            formattedChar = toupper(formattedChar);
+        }            
+
+        updateRollingBuffer(rollingBuffer, pcString);
+
+        if (checkBufferSequence(rollingBuffer, "\r#\r")){
+            taskYIELD();
+        } else if (checkBufferSequence(rollingBuffer, "\r%\r")){
+            xil_printf("Byte Count and interrupt counters reset\n\n");
+            byteCount  = 0;
+            countRxIrq = 0;
+            countTxIrq = 0;
         } else {
-            // No more data → disable TXEMPTY interrupt
-            disableTxEmpty();
-            break;
+            if (sendMethod == 1){
+                mySendByte((u8)formattedChar);
+            } else {
+                if (formattedChar != '\r'){
+                    if (txIndex < sizeof(txBuffer) - 1){
+                        txBuffer[txIndex++] = formattedChar;
+                    }
+                } else {
+                    txBuffer[txIndex++] = '\r';
+                    txBuffer[txIndex] = '\0';
+
+                    mySendString(txBuffer);
+
+                    txIndex = 0;
+                }
+            }
         }
     }
-
-    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-}
-
-// -------------------------------------------------
-// TXEMPTY control
-// -------------------------------------------------
-void enableTxEmpty()
-{
-    
-}
-
-void disableTxEmpty()
-{
-    
-}
-
-// -------------------------------------------------
-// Public API
-// -------------------------------------------------
-BaseType_t myReceiveData(void)
-{
-    return (uxQueueMessagesWaiting(xRxQueue) > 0);
 }
 
 
-BaseType_t myTransmitFull(void)
+void vBufferSendTask(void *p)
 {
-    return (uxQueueSpacesAvailable(xTxQueue) == 0);
+    while(1){
+        char countArray[10];
+        char CountRxIrqArray[10];
+        char CountTxIrqArray[10];
+
+        // Convert counts to strings
+        sprintf(countArray, "%d", byteCount);
+        sprintf(CountRxIrqArray, "%d", countRxIrq);
+        sprintf(CountTxIrqArray, "%d", countTxIrq);
+
+        // Build message
+        char message[256];
+        sprintf(message,
+            "\n\nBytes received:\t%s\n"
+            "Rx interrupts:\t%s\n"
+            "Tx interrupts:\t%s\n\n",
+            countArray,
+            CountRxIrqArray,
+            CountTxIrqArray);
+
+        mySendString(message);
+
+        // Context switch
+        taskYIELD();
+    }
 }
 
 
-void mySendByte(u8 data)
+/*----------------------------------------------------------------------------*/
+
+u8 checkBufferSequence(u8 rollingBuffer[], char* sequence)
 {
-    
+/*************************** Enter your code here ****************************/
+	if ( rollingBuffer[0] == sequence[0]
+	  && rollingBuffer[1] == sequence[1]
+	  && rollingBuffer[2] == sequence[2]
+	   )
+	{
+		return 1;
+	}
+	return 0;
+/*****************************************************************************/
 }
 
 
-u8 myReceiveByte(void)
+void updateRollingBuffer(u8 rollingBuffer[], u8 receivedByte)
 {
-    
-}
-
-
-void mySendString(const char* str)
-{
-    
-}
-
-
-// -------------------------------------------------
-// Initialization
-// -------------------------------------------------
-int initializeUART(void)
-{
-    int Status;
-
-    Config = XUartPs_LookupConfig(UART_DEVICE_ID);
-    if (NULL == Config){
-        return XST_FAILURE;
+	for (int i = 0; i < SEQUENCE_LENGTH - 1; i++){
+		rollingBuffer[i] = rollingBuffer[i+1];
     }
 
-    Status = XUartPs_CfgInitialize(&UART, Config, Config->BaseAddress);
-    if (Status != XST_SUCCESS){
-        return XST_FAILURE;
-    }
-
-    return XST_SUCCESS;
+    rollingBuffer[SEQUENCE_LENGTH - 1] = receivedByte;
 }
 
-int setupInterruptSystem(INTC *IntcInstancePtr, XUartPs *UartInstancePtr, u16 UartIntrId)
+
+// This function translates int values to their binary representation
+u32 sevenSegDecode(int countValue, u8 cathode)
 {
-    int Status;
-    XScuGic_Config *IntcConfig;
+    u32 result;
+    int digit;
 
-    IntcConfig = XScuGic_LookupConfig(INTC_DEVICE_ID);
-    if (NULL == IntcConfig)
-        return XST_FAILURE;
+    // Convert countValue to two decimal digits
+    if (cathode == 0) {
+        // LSD: the least significant digit
+        digit = countValue % 10;
+    } else {
+        // MSD: the most significant digit
+        digit = (countValue / 10) % 10;
+    }
 
-    Status = XScuGic_CfgInitialize(IntcInstancePtr, IntcConfig, IntcConfig->CpuBaseAddress);
-    if (Status != XST_SUCCESS)
-        return XST_FAILURE;
+    // Map the digit to the corresponding 7-segment display encoding
+    switch(digit){
+        case 0: result = 0b00111111; break; // 0
+        case 1: result = 0b00110000; break; // 1
+        case 2: result = 0b01011011; break; // 2
+        case 3: result = 0b01111001; break; // 3
+        case 4: result = 0b01110100; break; // 4
+        case 5: result = 0b01101101; break; // 5
+        case 6: result = 0b01101111; break; // 6
+        case 7: result = 0b00111000; break; // 7
+        case 8: result = 0b01111111; break; // 8
+        case 9: result = 0b01111100; break; // 9
+        default: result = 0b00000000; break; // Undefined, all segments are OFF
+    }
 
-    Xil_ExceptionRegisterHandler(XIL_EXCEPTION_ID_INT, (Xil_ExceptionHandler)XScuGic_InterruptHandler, IntcInstancePtr);
-
-    Status = XScuGic_Connect(IntcInstancePtr, UartIntrId, (Xil_ExceptionHandler)XUartPs_InterruptHandler, (void *)UartInstancePtr);
-    if (Status != XST_SUCCESS)
-        return XST_FAILURE;
-
-    XScuGic_Enable(IntcInstancePtr, UartIntrId);
-    Xil_ExceptionEnable();
-
-    XUartPs_SetHandler(UartInstancePtr, (XUartPs_Handler)interruptHandler, UartInstancePtr);
-
-    // -------------------------------------------------
-    // IMPORTANT: RX FIFO trigger level
-    // -------------------------------------------------
-    XUartPs_SetFifoThreshold(UartInstancePtr, 1);  // interrupt triggers when FIFO <= 1
-
-    // UART interrupt mask, Enable the interrupt when the receive buffer has reached a particular threshold
-	IntrMask = XUARTPS_IXR_TOUT | XUARTPS_IXR_RXFULL  |
-	           XUARTPS_IXR_RXOVR | XUARTPS_IXR_TXEMPTY;
-
-    XUartPs_SetInterruptMask(UartInstancePtr, IntrMask);
-    XUartPs_SetOperMode(UartInstancePtr, XUARTPS_OPER_MODE_NORMAL);
-
-    return XST_SUCCESS;
+    // The cathode logic remains unchanged
+    if (cathode == 1) {
+        return result;
+    } else {
+        return result | 0b10000000;
+    }
 }
 
 
