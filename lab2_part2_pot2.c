@@ -81,7 +81,8 @@ typedef enum {
   CMD_NONE,
   CMD_HASH = '1',
   CMD_VERIFY = '2',
-  CMD_KBD_SSD ='3'
+  CMD_KBD_SSD = '3',
+  CMD_KBD_RGB = '4'
 } command_type_t;
 
 typedef struct {
@@ -107,6 +108,7 @@ typedef struct {
 typedef struct {
     TickType_t xOn;
     TickType_t xPeriod;
+    uint8_t COLOUR;
 } duty_t;
 
 // ======================================================
@@ -171,6 +173,10 @@ const char *init_message =
 	"value or hash code, is unique (within reason) to the given input. In this lab,\n"
 	"we use the sha256 algorithm to compute the hash of a given string or to verify\n"
 	"a signature.\n";
+
+//
+volatile int g_ssd_source_uart = 0;
+volatile int g_rgb_source_uart = 0;
 
 
 // ======================================================
@@ -351,7 +357,7 @@ static void CLI_Task(void *pvParameters)
 
     for (;;){
         print_string("\n*******************************************\n");
-        print_string("Menu:\n1. Hash a string\n2. Verify hash of a given string\n3. SSD Display\n");
+        print_string("Menu:\n1. Hash a string\n2. Verify hash of a given string\n3. SSD Display\n4. LED Control\n");
         print_string("\nEnter your option: ");
 
         receive_byte((uint8_t *)&op);
@@ -405,8 +411,16 @@ static void CLI_Task(void *pvParameters)
                 print_string("Enter q to quit.\n");
                 print_string("Enter command: \n");
 
-                flush_uart();
                 getHex();
+
+                break;
+            
+            case CMD_KBD_RGB:
+                print_string("Keyboard to RGB Active. Please input one of the following options.\n");
+                print_string("Select either a colour, or change the brightness of the LED.\n");
+                print_string("Select:\n1. Red\n2. Green\n3. Blue\n4. Yellow\n5. Cyan\n6. Magenta\n7. White\n");
+                print_string("Brightness Controls: + to increase, - to decrease.\n");
+                print_string("Enter Command: ");
 
                 break;
 
@@ -510,7 +524,9 @@ static void vKeypadTask( void *pvParameters )
         txKey.previous = previous_key;
         txKey.current = current_key;
 
-        xQueueOverwrite(xkey2display, &txKey);
+        if (!g_ssd_source_uart) {
+            xQueueOverwrite(xkey2display, &txKey);
+        }
 
 /*****************************************************************************/
 	}
@@ -576,7 +592,9 @@ while (1)
             vTaskDelay(xBtnDelay);
         }
         
-        xQueueOverwrite(xbtn2rgb, &txBtn);
+        if (!g_rgb_source_uart) {
+            xQueueOverwrite(xbtn2rgb, &txBtn);
+        }
     }
 }
 
@@ -586,12 +604,13 @@ while (1)
 
 static void vRgbTask(void *pvParameters)
 {
-    const uint8_t color = RGB_CYAN;
+    uint8_t color = RGB_CYAN;
 	TickType_t xOff;
     duty_t rxBtn;
-
+    
     while (1){
-        
+
+
         if (xQueueReceive(xbtn2rgb, &rxBtn, 0) == pdPASS) {
 
             xOff = rxBtn.xPeriod - rxBtn.xOn;
@@ -674,47 +693,43 @@ void getHex()
 {
     uint8_t c;
     key_t txKey;
+    g_ssd_source_uart = 1;
 
     txKey.previous = 'x';
-    txKey.current  = 'x';
+    txKey.current = 'x';
 
-    // The pending character can temporarily hold the variable
-    char pending = 0;
-
+    
     while (1)
     {
         receive_byte(&c);
 
+        if (c == '\r' || c == '\n')
+            continue;
+
         if (c == 'q' || c == 'Q')
         {
+            g_ssd_source_uart = 0;
             print_string("\nExiting keyboard mode\n");
             return;
         }
 
-        // Pressing enter to update the display
-        if (c == '\r' || c == '\n')
-        {
-            if (pending != 0)
-            {
-                txKey.previous = txKey.current;
-                txKey.current = pending;
-
-                xQueueOverwrite(xkey2display, &txKey);
-
-                pending = 0;   // reset
-            }
-            continue;
-        }
-
-        // Valid hex key
         if (hexChk(c))
         {
             if (c >= 'a' && c <= 'f')
-                c -= 32;  // convert to uppercase
+                c -= 32;
 
-            pending = c;  // store until ENTER pressed
+            txKey.previous = txKey.current;
+            txKey.current = c;
+
+            xQueueOverwrite(xkey2display, &txKey);
+
+            print_string("\nDisplaying: ");
+            char out = c;
+            xQueueSend(q_tx, &out, 0);
+            print_string("\n");
+
         }
-        else
+        else 
         {
             print_string("\nInvalid hex key\n");
         }
