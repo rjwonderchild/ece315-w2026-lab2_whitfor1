@@ -166,6 +166,7 @@ void print_new_lines(int count);
 void flush_uart(void);
 void getHex();
 int hexChk(char c);
+void getRgb();
 
 const char *init_message =
 	"A hash function is a mathematical algorithm that takes an input (or \"message\")\n"
@@ -256,8 +257,6 @@ int main(void)
             tskIDLE_PRIORITY,
             NULL);
 
-
-
   xTaskCreate(UART_RX_Task,
             "UART_RX",
             1024, 
@@ -286,7 +285,6 @@ int main(void)
                 2, 
                 NULL);
   
-
   configASSERT(UART_RX_Task);
   configASSERT(UART_TX_Task);
   configASSERT(CLI_Task);
@@ -420,7 +418,9 @@ static void CLI_Task(void *pvParameters)
                 print_string("Select either a colour, or change the brightness of the LED.\n");
                 print_string("Select:\n1. Red\n2. Green\n3. Blue\n4. Yellow\n5. Cyan\n6. Magenta\n7. White\n");
                 print_string("Brightness Controls: + to increase, - to decrease.\n");
-                print_string("Enter Command: ");
+                print_string("\nEnter Command: ");
+
+                getRgb();
 
                 break;
 
@@ -546,7 +546,7 @@ static void vDisplayTask(void *pvParameters)
 
     while (1) 
     {
-        if (xQueueReceive(xkey2display, &rxKey, 0) == pdPASS) 
+        if (xQueueReceive(xkey2display, &rxKey, 0) == pdTRUE) 
             {
                 currentKey = rxKey;
             }
@@ -572,6 +572,7 @@ const TickType_t xBtnDelay  = pdMS_TO_TICKS(150);
 duty_t txBtn;
 txBtn.xPeriod = 10;
 txBtn.xOn = 5;
+txBtn.COLOUR = RGB_CYAN;
 
 while (1)
     {
@@ -610,8 +611,9 @@ static void vRgbTask(void *pvParameters)
     
     while (1){
 
+        if (xQueueReceive(xbtn2rgb, &rxBtn, 0) == pdTRUE) {
 
-        if (xQueueReceive(xbtn2rgb, &rxBtn, 0) == pdPASS) {
+            color = rxBtn.COLOUR;
 
             xOff = rxBtn.xPeriod - rxBtn.xOn;
 
@@ -733,6 +735,81 @@ void getHex()
         {
             print_string("\nInvalid hex key\n");
         }
+    }
+}
+
+void getRgb()
+{
+    uint8_t cmd;
+    duty_t txBtn;
+
+    g_rgb_source_uart = 1;
+
+    txBtn.xPeriod = 10;
+    txBtn.xOn = 5;
+    txBtn.COLOUR = RGB_CYAN;
+
+    while (1) 
+    {
+        receive_byte(&cmd);
+
+        if (cmd == '\r' || cmd == '\n')
+            continue;  
+
+        if (cmd == 'q' || cmd == 'Q')
+        {
+            g_rgb_source_uart = 0;
+            print_string("\nExiting RGB keyboard mode\n");
+            return;
+        }
+
+        switch(cmd)
+        {
+            case '=':
+                if (txBtn.xOn < txBtn.xPeriod)
+                    txBtn.xOn++;
+                break;
+
+            case '-':
+                if (txBtn.xOn > 0)
+                    txBtn.xOn--;
+                break;
+            
+            case '1':
+                txBtn.COLOUR = RGB_RED;
+                break;
+            
+            case '2':
+                txBtn.COLOUR = RGB_GREEN;
+                break;
+            
+            case '3':
+                txBtn.COLOUR = RGB_BLUE;
+                break;
+            
+            case '4':
+                txBtn.COLOUR = RGB_YELLOW;
+                break;
+            
+            case '5':
+                txBtn.COLOUR = RGB_CYAN;
+                break;
+            
+            case '6':
+                txBtn.COLOUR = RGB_MAGENTA;
+                break;
+            
+            case '7':
+                txBtn.COLOUR = RGB_WHITE;
+                break;
+            
+            default:
+                print_string("\nInvalid command\n");
+                continue;
+        }
+
+        xQueueOverwrite(xbtn2rgb, &txBtn);
+        
     }
 }
 
