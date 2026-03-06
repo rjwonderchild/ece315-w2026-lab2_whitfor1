@@ -172,6 +172,9 @@ const char *init_message =
 	"we use the sha256 algorithm to compute the hash of a given string or to verify\n"
 	"a signature.\n";
 
+//
+volatile int g_ssd_source_uart = 0;
+
 
 // ======================================================
 // main()
@@ -509,7 +512,9 @@ static void vKeypadTask( void *pvParameters )
         txKey.previous = previous_key;
         txKey.current = current_key;
 
-        xQueueOverwrite(xkey2display, &txKey);
+        if (!g_ssd_source_uart) {
+            xQueueOverwrite(xkey2display, &txKey);
+        }
 
 /*****************************************************************************/
 	}
@@ -673,6 +678,7 @@ void getHex()
 {
     uint8_t c;
     key_t txKey;
+    g_ssd_source_uart = 1;
 
     txKey.previous = 'x';
     txKey.current = 'x';
@@ -687,6 +693,7 @@ void getHex()
 
         if (c == 'q' || c == 'Q')
         {
+            g_ssd_source_uart = 0;
             print_string("\nExiting keyboard mode\n");
             return;
         }
@@ -838,5 +845,8 @@ static void uart_tx_byte(uint8_t b)
 
   }
   
+  XUartPs_WriteReg(UartPs.Config.BaseAddress, XUARTPS_FIFO_OFFSET, b);
+}
+
   XUartPs_WriteReg(UartPs.Config.BaseAddress, XUARTPS_FIFO_OFFSET, b);
 }
