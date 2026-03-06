@@ -7,7 +7,7 @@
  *  Modified by : Antonio Andara
  *  Modified on	: January, 2026
  *  Authors : Riley Whitford (whitfor1), Komaldeep Tagger (ktaggar)
- *  Modified on : March 4, 2026
+ *  Modified on : March 5, 2026
  *     ------------------------------------------------------------------------------------------------------------------------------
  *
  *     This is the main file that uses "sha256.h" header file.
@@ -81,6 +81,8 @@ typedef enum {
   CMD_NONE,
   CMD_HASH = '1',
   CMD_VERIFY = '2',
+  CMD_KBD_SSD = '3',
+  CMD_KBD_RGB = '4'
 } command_type_t;
 
 typedef struct {
@@ -106,6 +108,7 @@ typedef struct {
 typedef struct {
     TickType_t xOn;
     TickType_t xPeriod;
+    uint8_t COLOUR;
 } duty_t;
 
 // ======================================================
@@ -161,6 +164,9 @@ static void uart_tx_byte(uint8_t b);
 void print_string(const char *str);
 void print_new_lines(int count);
 void flush_uart(void);
+void getHex();
+int hexChk(char c);
+void getRgb();
 
 const char *init_message =
 	"A hash function is a mathematical algorithm that takes an input (or \"message\")\n"
@@ -168,6 +174,10 @@ const char *init_message =
 	"value or hash code, is unique (within reason) to the given input. In this lab,\n"
 	"we use the sha256 algorithm to compute the hash of a given string or to verify\n"
 	"a signature.\n";
+
+//
+volatile int g_ssd_source_uart = 0;
+volatile int g_rgb_source_uart = 0;
 
 
 // ======================================================
@@ -247,8 +257,6 @@ int main(void)
             tskIDLE_PRIORITY,
             NULL);
 
-
-
   xTaskCreate(UART_RX_Task,
             "UART_RX",
             1024, 
@@ -277,7 +285,6 @@ int main(void)
                 2, 
                 NULL);
   
-
   configASSERT(UART_RX_Task);
   configASSERT(UART_TX_Task);
   configASSERT(CLI_Task);
@@ -348,7 +355,7 @@ static void CLI_Task(void *pvParameters)
 
     for (;;){
         print_string("\n*******************************************\n");
-        print_string("Menu:\n1. Hash a string\n2. Verify hash of a given string\n");
+        print_string("Menu:\n1. Hash a string\n2. Verify hash of a given string\n3. SSD Display\n4. LED Control\n");
         print_string("\nEnter your option: ");
 
         receive_byte((uint8_t *)&op);
@@ -395,6 +402,26 @@ static void CLI_Task(void *pvParameters)
 				} else {
                     print_string("\nHashes are different\n");
 				}
+                break;
+
+            case CMD_KBD_SSD:
+                print_string("Keyboard to SSD Active. Please input a hex valid key; 0-9, a-f, or A-F.\n");
+                print_string("Enter q to quit.\n");
+                print_string("Enter command: \n");
+
+                getHex();
+
+                break;
+            
+            case CMD_KBD_RGB:
+                print_string("Keyboard to RGB Active. Please input one of the following options.\n");
+                print_string("Select either a colour, or change the brightness of the LED.\n");
+                print_string("Select:\n1. Red\n2. Green\n3. Blue\n4. Yellow\n5. Cyan\n6. Magenta\n7. White\n");
+                print_string("Brightness Controls: + to increase, - to decrease.\n");
+                
+
+                getRgb();
+
                 break;
 
             default:
@@ -497,7 +524,9 @@ static void vKeypadTask( void *pvParameters )
         txKey.previous = previous_key;
         txKey.current = current_key;
 
-        xQueueOverwrite(xkey2display, &txKey);
+        if (!g_ssd_source_uart) {
+            xQueueOverwrite(xkey2display, &txKey);
+        }
 
 /*****************************************************************************/
 	}
@@ -513,20 +542,22 @@ static void vDisplayTask(void *pvParameters)
     const TickType_t xDelay = pdMS_TO_TICKS(12);
     // 10 works, 15 has slight flickering, 12 seems to have no flickering.
     key_t rxKey;
+    key_t currentKey = {'x', 'x'};
 
     while (1) 
     {
-        if (xQueueReceive(xkey2display, &rxKey, 0) == pdPASS) {
+        if (xQueueReceive(xkey2display, &rxKey, 0) == pdTRUE) 
+            {
+                currentKey = rxKey;
+            }
 
-            ssd_value = SSD_decode(rxKey.current, 1);
+            ssd_value = SSD_decode(currentKey.current, 1);
             XGpio_DiscreteWrite(&SSDInst, 1, ssd_value);
             vTaskDelay(xDelay);
 
-            ssd_value = SSD_decode(rxKey.previous, 0);
+            ssd_value = SSD_decode(currentKey.previous, 0);
             XGpio_DiscreteWrite(&SSDInst, 1, ssd_value);
             vTaskDelay(xDelay);
-
-        }
     }
 }
 
@@ -541,6 +572,7 @@ const TickType_t xBtnDelay  = pdMS_TO_TICKS(150);
 duty_t txBtn;
 txBtn.xPeriod = 10;
 txBtn.xOn = 5;
+txBtn.COLOUR = RGB_CYAN;
 
 while (1)
     {
@@ -561,7 +593,9 @@ while (1)
             vTaskDelay(xBtnDelay);
         }
         
-        xQueueOverwrite(xbtn2rgb, &txBtn);
+        if (!g_rgb_source_uart) {
+            xQueueOverwrite(xbtn2rgb, &txBtn);
+        }
     }
 }
 
@@ -571,32 +605,34 @@ while (1)
 
 static void vRgbTask(void *pvParameters)
 {
-    const uint8_t color = RGB_CYAN;
-	TickType_t xOff;
     duty_t rxBtn;
-
+    duty_t current = {5, 10, RGB_CYAN}; // default state
+    TickType_t xOff;
+    
     while (1){
-        
-        if (xQueueReceive(xbtn2rgb, &rxBtn, 0) == pdPASS) {
 
-            xOff = rxBtn.xPeriod - rxBtn.xOn;
+        if (xQueueReceive(xbtn2rgb, &rxBtn, 0) == pdTRUE) 
+        {
+            current = rxBtn;
+        }
 
-            if (rxBtn.xOn == 0) {
-                // LED is OFF here
-                XGpio_DiscreteWrite(&rgbLedInst, RGB_CHANNEL, 0);
-                vTaskDelay(xOff);
-            } else {
-                // LED is ON here
-                XGpio_DiscreteWrite(&rgbLedInst, RGB_CHANNEL, color);
-                vTaskDelay(rxBtn.xOn);
-                // LED is OFF here
-                XGpio_DiscreteWrite(&rgbLedInst, RGB_CHANNEL, 0);
-                vTaskDelay(xOff);
-            }
+        xOff = current.xPeriod - current.xOn;
+
+        if (current.xOn == 0) {
+            // LED is OFF here
+            XGpio_DiscreteWrite(&rgbLedInst, RGB_CHANNEL, 0);
+            vTaskDelay(xOff);
+        } else {
+            // LED is ON here
+            XGpio_DiscreteWrite(&rgbLedInst, RGB_CHANNEL, current.COLOUR);
+            vTaskDelay(current.xOn);
+            // LED is OFF here
+            XGpio_DiscreteWrite(&rgbLedInst, RGB_CHANNEL, 0);
+            vTaskDelay(xOff);
         }
     }
-
 }
+
 
 void InitializeKeypad()
 {
@@ -638,6 +674,146 @@ u32 SSD_decode(u8 key_value, u8 cathode)
             return result | 0b10000000;
 	}
 }
+
+// ======================================================
+// UART SSD TASK
+// ======================================================
+
+int hexChk(char c) 
+{
+    if ((c >= '0' && c<= '9') ||
+        (c >= 'a' && c<= 'f') ||
+        (c >= 'A' && c<= 'F'))
+        {
+            return 1;
+        }
+
+        return 0;
+}
+
+void getHex()
+{
+    uint8_t c;
+    key_t txKey;
+    g_ssd_source_uart = 1;
+
+    txKey.previous = 'x';
+    txKey.current = 'x';
+
+    
+    while (1)
+    {
+        receive_byte(&c);
+
+        if (c == '\r' || c == '\n')
+            continue;
+
+        if (c == 'q' || c == 'Q')
+        {
+            g_ssd_source_uart = 0;
+            print_string("\nExiting keyboard mode\n");
+            return;
+        }
+
+        if (hexChk(c))
+        {
+            if (c >= 'a' && c <= 'f')
+                c -= 32;
+
+            txKey.previous = txKey.current;
+            txKey.current = c;
+
+            xQueueOverwrite(xkey2display, &txKey);
+
+            print_string("\nDisplaying: ");
+            char out = c;
+            xQueueSend(q_tx, &out, 0);
+            print_string("\n");
+
+        }
+        else 
+        {
+            print_string("\nInvalid hex key\n");
+        }
+    }
+}
+
+void getRgb()
+{
+    uint8_t cmd;
+    duty_t txBtn;
+
+    g_rgb_source_uart = 1;
+
+    txBtn.xPeriod = 10;
+    txBtn.xOn = 5;
+    txBtn.COLOUR = RGB_CYAN;
+
+    while (1) 
+    {
+        receive_byte(&cmd);
+
+        if (cmd == '\r' || cmd == '\n')
+            continue;  
+
+        if (cmd == 'q' || cmd == 'Q')
+        {
+            g_rgb_source_uart = 0;
+            print_string("\nExiting RGB keyboard mode\n");
+            return;
+        }
+
+        switch(cmd)
+        {
+            case '=':
+                if (txBtn.xOn < txBtn.xPeriod)
+                    txBtn.xOn++;
+                break;
+
+            case '-':
+                if (txBtn.xOn > 0)
+                    txBtn.xOn--;
+                break;
+            
+            case '1':
+                txBtn.COLOUR = RGB_RED;
+                break;
+            
+            case '2':
+                txBtn.COLOUR = RGB_GREEN;
+                break;
+            
+            case '3':
+                txBtn.COLOUR = RGB_BLUE;
+                break;
+            
+            case '4':
+                txBtn.COLOUR = RGB_YELLOW;
+                break;
+            
+            case '5':
+                txBtn.COLOUR = RGB_CYAN;
+                break;
+            
+            case '6':
+                txBtn.COLOUR = RGB_MAGENTA;
+                break;
+            
+            case '7':
+                txBtn.COLOUR = RGB_WHITE;
+                break;
+            
+            default:
+                print_string("\nInvalid command\n");
+                continue;
+        }
+
+        print_string("\nEnter Command: ");
+        xQueueOverwrite(xbtn2rgb, &txBtn);
+        
+    }
+}
+
 
 uint8_t receive_byte(uint8_t *out_byte)
 {
