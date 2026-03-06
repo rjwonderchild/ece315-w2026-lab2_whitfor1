@@ -1,13 +1,13 @@
 /*
- * uart_driver.c
- * Created on: July 27, 2021
- * Author: Shyama M. Gandhi
- * Modified by : Antonio Andara
- * Modified on : February 22, 2026
- * Modified by : Riley Whitford (whitfor1), Komaldeep Taggar (ktaggar)
- * Modified on : March 5, 2026
- * TXTRIG-based UART driver
- */
+* uart_driver.c
+* Created on: July 27, 2021
+* Author: Shyama M. Gandhi
+* Modified by : Antonio Andara
+* Modified on : February 22, 2026
+* Modified by : Riley Whitford (whitfor1), Komaldeep Taggar (ktaggar)
+* Modified on : March 5, 2026
+* TXTRIG-based UART driver
+*/
 
 
 #include "uart_driver.h"
